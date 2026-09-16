@@ -344,5 +344,5 @@ Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
     if current == nil { flushOutbox() }
 }
 flushOutbox()
-refreshStatus()
+MainActor.assumeIsolated { refreshStatus() }
 app.run()
