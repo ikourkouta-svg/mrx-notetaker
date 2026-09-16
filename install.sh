@@ -56,3 +56,4 @@ PLIST
 launchctl bootstrap "gui/$(id -u)" "$AGENT"
 echo
 echo "DONE. MRX Notetaker now starts by itself with the Mac and records Teams and Zoom calls automatically."
+echo "Look at the top right of your screen, next to the clock: MRX (grey) = waiting, REC (red) = recording a call."

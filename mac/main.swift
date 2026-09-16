@@ -8,6 +8,7 @@
 //
 // Usage: MRXNotetaker --user costas@mrexporttoafrica.com [--selftest]
 
+import AppKit
 import AVFoundation
 import AudioToolbox
 import CoreAudio
@@ -194,6 +195,14 @@ final class Session {
         log("recording \(name)")
     }
 
+    /// The user chose "Stop and delete this recording": nothing is kept or uploaded.
+    func discard() {
+        mic.stop()
+        system.stop()
+        try? FileManager.default.removeItem(at: dir)
+        log("recording deleted by the user")
+    }
+
     func finish() {
         mic.stop()
         system.stop()
@@ -277,21 +286,62 @@ if args.contains("--selftest") {
 
 log("MRX Notetaker v\(version) watching for calls as \(user)")
 var current: Session?
+var skipThisCall = false  // set when the user deletes a recording; cleared when that call ends
 var lastSeen = Date.distantPast
+
+// Menu bar indicator, so it is always visible whether a call is being recorded.
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+let stateLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+final class MenuActions: NSObject {
+    @objc func discard() {
+        current?.discard()
+        current = nil
+        skipThisCall = true
+        refreshStatus()
+    }
+}
+let actions = MenuActions()
+let discardItem = NSMenuItem(title: "Stop and delete this recording", action: #selector(MenuActions.discard), keyEquivalent: "")
+discardItem.target = actions
+let menu = NSMenu()
+menu.autoenablesItems = false
+stateLine.isEnabled = false
+menu.addItem(stateLine)
+menu.addItem(discardItem)
+statusItem.menu = menu
+
+func refreshStatus() {
+    if let session = current {
+        let time = DateFormatter.localizedString(from: session.started, dateStyle: .none, timeStyle: .short)
+        statusItem.button?.attributedTitle = NSAttributedString(string: "\u{25CF} REC", attributes: [.foregroundColor: NSColor.systemRed])
+        stateLine.title = "Recording this call since \(time)"
+        discardItem.isHidden = false
+    } else {
+        statusItem.button?.attributedTitle = NSAttributedString(string: "MRX", attributes: [.foregroundColor: NSColor.secondaryLabelColor])
+        stateLine.title = skipThisCall ? "Not recording this call (you deleted it)" : "Not recording. Waiting for a Teams or Zoom call"
+        discardItem.isHidden = true
+    }
+}
+
 Timer.scheduledTimer(withTimeInterval: poll, repeats: true) { _ in
     if let app = meetingAppOnMic() {
         lastSeen = Date()
-        if current == nil {
+        if current == nil && !skipThisCall {
             log("call detected (\(app))")
             current = try? Session(user: user, selftest: false)
         }
-    } else if let session = current, Date().timeIntervalSince(lastSeen) > grace {
-        session.finish()
+    } else if Date().timeIntervalSince(lastSeen) > grace {
+        current?.finish()
         current = nil
+        skipThisCall = false
     }
+    refreshStatus()
 }
 Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
     if current == nil { flushOutbox() }
 }
 flushOutbox()
-RunLoop.main.run()
+refreshStatus()
+app.run()
