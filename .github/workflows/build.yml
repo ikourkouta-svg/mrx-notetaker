@@ -1,0 +1,20 @@
+name: build
+on:
+  push:
+    branches: [main]
+    paths: ["mac/**", ".github/workflows/build.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  mac:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: mac/build.sh
+      - name: Publish as the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v1-build${{ github.run_number }}"
+          gh release create "$tag" mac/build/MRXNotetaker.zip --title "$tag" --notes "Automatic build of $GITHUB_SHA" --latest

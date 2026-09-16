@@ -1,0 +1,11 @@
+[Unit]
+Description=MRX notetaker (automatic call recorder)
+After=pipewire-pulse.service
+
+[Service]
+ExecStart=/usr/bin/python3 %h/Projects/General/mrx-notetaker/linux/notetaker.py --user john@mrexporttoafrica.com
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
