@@ -295,7 +295,7 @@ app.setActivationPolicy(.accessory)
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 let stateLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 final class MenuActions: NSObject {
-    @objc func discard() {
+    @MainActor @objc func discard() {
         current?.discard()
         current = nil
         skipThisCall = true
@@ -312,7 +312,7 @@ menu.addItem(stateLine)
 menu.addItem(discardItem)
 statusItem.menu = menu
 
-func refreshStatus() {
+@MainActor func refreshStatus() {
     if let session = current {
         let time = DateFormatter.localizedString(from: session.started, dateStyle: .none, timeStyle: .short)
         statusItem.button?.attributedTitle = NSAttributedString(string: "\u{25CF} REC", attributes: [.foregroundColor: NSColor.systemRed])
@@ -325,7 +325,8 @@ func refreshStatus() {
     }
 }
 
-Timer.scheduledTimer(withTimeInterval: poll, repeats: true) { _ in
+// Timers are scheduled on the main run loop, so their closures run on the main thread.
+Timer.scheduledTimer(withTimeInterval: poll, repeats: true) { _ in MainActor.assumeIsolated {
     if let app = meetingAppOnMic() {
         lastSeen = Date()
         if current == nil && !skipThisCall {
@@ -338,7 +339,7 @@ Timer.scheduledTimer(withTimeInterval: poll, repeats: true) { _ in
         skipThisCall = false
     }
     refreshStatus()
-}
+} }
 Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
     if current == nil { flushOutbox() }
 }
