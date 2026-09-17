@@ -17,7 +17,10 @@ import subprocess
 import time
 from pathlib import Path
 
-MEETING_APPS = ("teams-for-linux", "teams", "chrome", "chromium", "msedge", "microsoft-edge", "firefox", "zoom")
+# Doom is John's own machine and its summaries reach John alone, so personal call apps are included
+# here. The macOS build deliberately leaves them out: Costas was told they are never recorded.
+MEETING_APPS = ("teams-for-linux", "teams", "chrome", "chromium", "msedge", "microsoft-edge", "firefox",
+                "zoom", "viber", "whatsapp", "telegram", "signal-desktop", "skype")
 POLL, GRACE = 3, 45
 
 
