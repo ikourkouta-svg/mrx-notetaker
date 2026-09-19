@@ -16,5 +16,7 @@ lipo -create build/w-arm64/bin/whisper-cli build/w-x86_64/bin/whisper-cli -outpu
 lipo -create build/MRXNotetaker-arm64 build/MRXNotetaker-x86_64 -output build/MRXNotetaker.app/Contents/MacOS/MRXNotetaker
 cp Info.plist build/MRXNotetaker.app/Contents/Info.plist
 cp build/whisper-cli build/MRXNotetaker.app/Contents/MacOS/whisper-cli
+# nested binaries must be signed before the bundle that contains them
+codesign --force --sign - build/MRXNotetaker.app/Contents/MacOS/whisper-cli
 codesign --force --sign - build/MRXNotetaker.app   # ad-hoc: no Apple developer account needed
 (cd build && ditto -c -k --keepParent MRXNotetaker.app MRXNotetaker.zip)
