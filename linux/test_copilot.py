@@ -25,6 +25,28 @@ class Triggers(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
+class Arming(unittest.TestCase):
+    """A browser on the mic is not a business call: WhatsApp Web and Viber run in Chrome too."""
+
+    def test_meeting_windows_recognised(self):
+        for title in ("Meet - abc-defg-hij - Google Chrome", "Microsoft Teams", "Zoom Meeting"):
+            self.assertTrue(copilot.MEETING_WINDOW.search(title), title)
+
+    def test_personal_browser_windows_do_not_count(self):
+        for title in ("WhatsApp - Google Chrome", "Viber", "Gmail - Google Chrome"):
+            self.assertIsNone(copilot.MEETING_WINDOW.search(title), title)
+
+    def test_daily_cap_blocks_cloud_but_not_private(self):
+        shown = []
+        advisor = copilot.Advisor.__new__(copilot.Advisor)
+        advisor.busy, advisor.last_auto = False, 0.0
+        advisor.sent, advisor.day = copilot.MAX_ADVICE_PER_DAY, __import__("time").strftime("%Y-%m-%d")
+        advisor.t = type("T", (), {"window": lambda self, **kw: "Them: your price is too high"})()
+        advisor.brief, advisor.show = "brief", lambda text, note: shown.append(text)
+        advisor.ask()
+        self.assertIn("daily limit", shown[-1])
+
+
 class Brief(unittest.TestCase):
     def test_brief_forbids_inventing_numbers(self):
         prompt = copilot.SYSTEM_PROMPT.format(brief="x", minutes=4, theirs="Them", transcript="y")

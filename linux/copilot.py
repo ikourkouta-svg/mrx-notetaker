@@ -48,6 +48,9 @@ PCLOUD_CLIENTS = Path.home() / "pCloudDrive/01-MRX/Clients"
 # Business calls only. Viber, WhatsApp, Telegram, Signal and Skype are deliberately absent: those are
 # recorded for John's own notes, but never transcribed live or sent to Gemini.
 BUSINESS_APPS = ("teams-for-linux", "teams", "chrome", "chromium", "msedge", "microsoft-edge", "firefox", "zoom")
+# These are meeting apps by definition; a browser additionally needs a meeting window open.
+DEDICATED_APPS = ("teams-for-linux", "teams", "zoom")
+MAX_ADVICE_PER_DAY = 200  # cost and privacy stop: no runaway loop can drain the key
 OURS, THEIRS = "Me", "Them"
 
 # Counterpart lines that deserve advice without being asked: money, proof, competition, delay, a question.
@@ -173,6 +176,7 @@ class Advisor:
     def __init__(self, transcriber, brief, show):
         self.t, self.brief, self.show = transcriber, brief, show
         self.busy, self.last_auto = False, 0.0
+        self.sent, self.day = 0, time.strftime("%Y-%m-%d")
 
     def ask(self, private=PRIVATE_BY_DEFAULT, reason=""):
         if self.busy:
@@ -180,6 +184,13 @@ class Advisor:
         transcript = self.t.window()
         if not transcript:
             return self.show("(nothing heard yet)", "")
+        today = time.strftime("%Y-%m-%d")
+        if today != self.day:
+            self.sent, self.day = 0, today
+        if not private:
+            if self.sent >= MAX_ADVICE_PER_DAY:
+                return self.show(f"daily limit of {MAX_ADVICE_PER_DAY} reached; F10 still works", "")
+            self.sent += 1
         self.busy = True
         self.show("thinking...", reason)
         prompt = SYSTEM_PROMPT.format(brief=self.brief, minutes=WINDOW_MINUTES, theirs=THEIRS, transcript=transcript)
@@ -204,12 +215,33 @@ class Advisor:
 
 # ---------- audio ----------
 
+MEETING_WINDOW = re.compile(r"microsoft teams|teams\b|google meet|\bmeet\b|zoom|webex|jitsi|whereby|gotomeeting", re.I)
+
+
+def meeting_window_open():
+    """A browser on the mic proves nothing: WhatsApp Web and Viber run in Chrome too. Require a
+    meeting window to be open before a browser is treated as a business call."""
+    try:
+        titles = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return False
+    return bool(MEETING_WINDOW.search(titles))
+
+
 def business_app_on_mic():
-    """Bundle/binary name of a business meeting app currently using the microphone, or None."""
-    out = subprocess.run(["pactl", "-f", "json", "list", "source-outputs"], capture_output=True, text=True).stdout
-    for o in json.loads(out or "[]"):
+    """Binary name of a business meeting app currently using the microphone, or None."""
+    try:
+        out = subprocess.run(["pactl", "-f", "json", "list", "source-outputs"],
+                             capture_output=True, text=True, timeout=10).stdout
+        streams = json.loads(out or "[]")
+    except Exception as e:  # never let one bad poll kill the watcher thread
+        print(f"mic poll failed: {type(e).__name__}", file=sys.stderr)
+        return None
+    for o in streams:
         binary = (o["properties"].get("application.process.binary") or "").lower()
-        if binary.startswith(BUSINESS_APPS):
+        if not binary.startswith(BUSINESS_APPS):
+            continue
+        if binary.startswith(DEDICATED_APPS) or meeting_window_open():
             return binary
     return None
 
@@ -267,7 +299,11 @@ class Capture:
     def watch(self):
         last_seen = 0.0
         while True:
-            app = business_app_on_mic()
+            try:
+                app = business_app_on_mic()
+            except Exception as e:
+                print(f"watch failed: {type(e).__name__}", file=sys.stderr)
+                app = None
             if app:
                 last_seen = time.time()
                 if not self.running:
