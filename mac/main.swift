@@ -91,7 +91,7 @@ final class SystemRecorder {
     private var file: AVAudioFile?
     private let queue = DispatchQueue(label: "mrx.systemtap")
 
-    func start(_ url: URL) throws {
+    func start(_ url: URL, onBuffer: ((AVAudioPCMBuffer) -> Void)? = nil) throws {
         let tap = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
         tap.uuid = UUID()
         tap.muteBehavior = .unmuted
@@ -125,6 +125,7 @@ final class SystemRecorder {
         status = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, input, _, _, _ in
             if let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: input, deallocator: nil) {
                 try? file.write(from: buffer)
+                onBuffer?(buffer)
             }
         }
         guard status == noErr else { throw NTError("io proc failed (\(status))") }
@@ -148,7 +149,7 @@ final class MicRecorder {
     private var file: AVAudioFile?
     private let lock = NSLock()
 
-    func start(_ url: URL) throws {
+    func start(_ url: URL, onBuffer: ((AVAudioPCMBuffer) -> Void)? = nil) throws {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { throw NTError("no microphone") }
@@ -158,6 +159,7 @@ final class MicRecorder {
             self?.lock.lock()
             try? self?.file?.write(from: buffer)
             self?.lock.unlock()
+            onBuffer?(buffer)
         }
         try engine.start()
     }
@@ -179,10 +181,15 @@ final class Session {
     let user: String, selftest: Bool, started = Date()
     let dir: URL
     let mic = MicRecorder(), system = SystemRecorder()
+    let armed: Bool
 
-    init(user: String, selftest: Bool) throws {
+    init(user: String, selftest: Bool, app: String = "") throws {
         self.user = user
         self.selftest = selftest
+        // Only Teams, Zoom and Webex arm the live copilot; browsers cannot be told apart from
+        // WhatsApp Web without the Screen Recording permission this app avoids.
+        let armed = !selftest && copilot != nil && copilotApps.contains(where: { app.hasPrefix($0) })
+        self.armed = armed
         let stamp = DateFormatter()
         stamp.dateFormat = "yyyyMMdd-HHmmss"
         stamp.timeZone = TimeZone(identifier: "UTC")
@@ -190,8 +197,15 @@ final class Session {
         dir = recordingDir.appendingPathComponent(name)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // Each track is independent: a missing permission on one must not lose the other.
-        do { try mic.start(dir.appendingPathComponent("mic.m4a")) } catch { log("mic: \(error)") }
-        do { try system.start(dir.appendingPathComponent("system.m4a")) } catch { log("system audio: \(error)") }
+        do {
+            try mic.start(dir.appendingPathComponent("mic.m4a"),
+                          onBuffer: armed ? { copilot?.micChunks.write($0) } : nil)
+        } catch { log("mic: \(error)") }
+        do {
+            try system.start(dir.appendingPathComponent("system.m4a"),
+                             onBuffer: armed ? { copilot?.systemChunks.write($0) } : nil)
+        } catch { log("system audio: \(error)") }
+        if armed { copilot?.callStarted() }
         log("recording \(name)")
     }
 
@@ -199,6 +213,7 @@ final class Session {
     func discard() {
         mic.stop()
         system.stop()
+        if armed { copilot?.callEnded() }
         try? FileManager.default.removeItem(at: dir)
         log("recording deleted by the user")
     }
@@ -206,6 +221,7 @@ final class Session {
     func finish() {
         mic.stop()
         system.stop()
+        if armed { copilot?.callEnded() }
         let fm = FileManager.default
         var files: [String: Int] = [:]
         for f in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] {
@@ -265,6 +281,7 @@ guard let userIndex = args.firstIndex(of: "--user"), userIndex + 1 < args.count 
     exit(2)
 }
 let user = args[userIndex + 1]
+let copilot = Copilot(chunkDir: support.appendingPathComponent("chunks"))
 let permission = DispatchSemaphore(value: 0)
 AVCaptureDevice.requestAccess(for: .audio) { granted in
     log("microphone permission: \(granted ? "granted" : "DENIED")")
@@ -284,7 +301,7 @@ if args.contains("--selftest") {
     exit(0)
 }
 
-log("MRX Notetaker v\(version) watching for calls as \(user)")
+log("MRX Notetaker v\(version) watching for calls as \(user)" + (copilot == nil ? "" : "; live copilot enabled"))
 var current: Session?
 var skipThisCall = false  // set when the user deletes a recording; cleared when that call ends
 var lastSeen = Date.distantPast
@@ -331,7 +348,7 @@ Timer.scheduledTimer(withTimeInterval: poll, repeats: true) { _ in MainActor.ass
         lastSeen = Date()
         if current == nil && !skipThisCall {
             log("call detected (\(app))")
-            current = try? Session(user: user, selftest: false)
+            current = try? Session(user: user, selftest: false, app: app)
         }
     } else if Date().timeIntervalSince(lastSeen) > grace {
         current?.finish()
