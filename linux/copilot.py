@@ -14,7 +14,11 @@ Set PRIVATE_BY_DEFAULT = True to make F9 local and F10 Flash.
 The advice is only as good as the brief: ~/.config/meeting-copilot/brief.md holds what we can
 promise and what we must not. The model is forbidden to invent a number that is not in there.
 
-Usage: copilot.py [--client NAME] [--brief FILE] [--replay FILE.wav] [--no-ui]
+Runs as a service and arms itself: the window appears when Teams, Zoom or a browser call starts and
+hides when it ends. Personal apps (Viber, WhatsApp, Telegram, Signal) never arm it, so no private
+call is ever transcribed or sent anywhere.
+
+Usage: copilot.py [--client NAME] [--brief FILE] [--replay FILE.wav] [--no-ui] [--always-on]
   --client NAME   also load notes from pCloud Clients/<state>/<NAME>/*.md|txt (case-insensitive)
   --replay FILE   feed an audio file as if it were a live call (testing), print advice, exit
   --no-ui         print to the terminal instead of the window (testing)
@@ -41,6 +45,9 @@ PRIVATE_BY_DEFAULT = False  # True = F9 stays on Doom (weaker advice), F10 becom
 GEMINI_ENV = Path.home() / ".doom-secrets/gemini-campaigns.env"
 GEMINI_MODEL = "gemini-flash-latest"  # keys minted after May cannot call gemini-2.5-flash
 PCLOUD_CLIENTS = Path.home() / "pCloudDrive/01-MRX/Clients"
+# Business calls only. Viber, WhatsApp, Telegram, Signal and Skype are deliberately absent: those are
+# recorded for John's own notes, but never transcribed live or sent to Gemini.
+BUSINESS_APPS = ("teams-for-linux", "teams", "chrome", "chromium", "msedge", "microsoft-edge", "firefox", "zoom")
 OURS, THEIRS = "Me", "Them"
 
 # Counterpart lines that deserve advice without being asked: money, proof, competition, delay, a question.
@@ -197,6 +204,16 @@ class Advisor:
 
 # ---------- audio ----------
 
+def business_app_on_mic():
+    """Bundle/binary name of a business meeting app currently using the microphone, or None."""
+    out = subprocess.run(["pactl", "-f", "json", "list", "source-outputs"], capture_output=True, text=True).stdout
+    for o in json.loads(out or "[]"):
+        binary = (o["properties"].get("application.process.binary") or "").lower()
+        if binary.startswith(BUSINESS_APPS):
+            return binary
+    return None
+
+
 def segmenter(source, out_dir, prefix):
     out_dir.mkdir(parents=True, exist_ok=True)
     return subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "pulse", "-i", source,
@@ -204,16 +221,60 @@ def segmenter(source, out_dir, prefix):
                              str(out_dir / f"{prefix}_%05d.wav")], stdin=subprocess.DEVNULL)
 
 
-def watch_chunks(out_dir, prefix, speaker, transcriber):
+def watch_chunks(out_dir, prefix, speaker, transcriber, stop):
     """A chunk is complete once ffmpeg has started the next one."""
     seen = set()
-    while True:
+    while not stop.is_set():
         files = sorted(out_dir.glob(f"{prefix}_*.wav"))
         for f in files[:-1]:
             if f not in seen:
                 seen.add(f)
                 transcriber.add(f, speaker)
         time.sleep(1)
+
+
+class Capture:
+    """Records and transcribes only while a business call is on."""
+
+    def __init__(self, transcriber, on_state):
+        self.t, self.on_state, self.procs, self.stop = transcriber, on_state, [], None
+        self.work = Path("/tmp/copilot-live")
+
+    @property
+    def running(self):
+        return bool(self.procs)
+
+    def start(self, app):
+        subprocess.run(["rm", "-rf", str(self.work)], check=False)
+        self.stop = threading.Event()
+        sink = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True).stdout.strip()
+        self.procs = [segmenter("@DEFAULT_SOURCE@", self.work, "me"), segmenter(f"{sink}.monitor", self.work, "them")]
+        for prefix, speaker in (("me", OURS), ("them", THEIRS)):
+            threading.Thread(target=watch_chunks, args=(self.work, prefix, speaker, self.t, self.stop), daemon=True).start()
+        print(f"call detected ({app}); copilot armed", flush=True)
+        self.on_state(True)
+
+    def finish(self):
+        self.stop.set()
+        for p in self.procs:
+            p.terminate()
+        self.procs = []
+        with self.t.lock:
+            self.t.lines.clear()  # next call starts with a clean transcript
+        print("call ended; copilot idle", flush=True)
+        self.on_state(False)
+
+    def watch(self):
+        last_seen = 0.0
+        while True:
+            app = business_app_on_mic()
+            if app:
+                last_seen = time.time()
+                if not self.running:
+                    self.start(app)
+            elif self.running and time.time() - last_seen > 45:
+                self.finish()
+            time.sleep(3)
 
 
 # ---------- window ----------
@@ -282,6 +343,7 @@ def main():
     ap.add_argument("--brief")
     ap.add_argument("--replay")
     ap.add_argument("--no-ui", action="store_true")
+    ap.add_argument("--always-on", action="store_true", help="record now, do not wait for a call")
     args = ap.parse_args()
     brief = brief_text(args.client, args.brief)
 
@@ -315,20 +377,30 @@ def main():
         root, show_fn = build_window(advisor)
         advisor.show = show_fn
     global_hotkeys(advisor, root)
-
     threading.Thread(target=transcriber.run, daemon=True).start()
-    work = Path("/tmp/copilot-live")
-    subprocess.run(["rm", "-rf", str(work)], check=False)
-    sink = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True).stdout.strip()
-    procs = [segmenter("@DEFAULT_SOURCE@", work, "me"), segmenter(f"{sink}.monitor", work, "them")]
-    for prefix, speaker in (("me", OURS), ("them", THEIRS)):
-        threading.Thread(target=watch_chunks, args=(work, prefix, speaker, transcriber), daemon=True).start()
-    print("copilot listening; F9 advice, F10 private", flush=True)
+
+    def on_state(live):
+        """The window is only on screen during a call, so it never sits over other work."""
+        if root is None:
+            return
+        if live:
+            root.after(0, lambda: (root.deiconify(), advisor.show("listening...", "call started")))
+        else:
+            root.after(0, root.withdraw)
+
+    capture = Capture(transcriber, on_state)
+    if args.always_on:
+        capture.start("--always-on")
+    else:
+        if root is not None:
+            root.withdraw()
+        threading.Thread(target=capture.watch, daemon=True).start()
+        print("copilot waiting for a call; F9 advice, F10 private", flush=True)
     try:
         root.mainloop() if root is not None else threading.Event().wait()
     finally:
-        for p in procs:
-            p.terminate()
+        if capture.running:
+            capture.finish()
 
 
 if __name__ == "__main__":

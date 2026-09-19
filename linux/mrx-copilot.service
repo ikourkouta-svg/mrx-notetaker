@@ -1,0 +1,13 @@
+[Unit]
+Description=MRX live meeting copilot (arms itself when a business call starts)
+After=graphical-session.target pipewire-pulse.service
+
+[Service]
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
+ExecStart=%h/Projects/General/empire-hq/email-assistant/.venv/bin/python %h/Projects/General/mrx-notetaker/linux/copilot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
