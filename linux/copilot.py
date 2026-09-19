@@ -44,13 +44,19 @@ PCLOUD_CLIENTS = Path.home() / "pCloudDrive/01-MRX/Clients"
 OURS, THEIRS = "Me", "Them"
 
 # Counterpart lines that deserve advice without being asked: money, proof, competition, delay, a question.
-TRIGGERS = re.compile(r"""(budget|too expensive|expensive|discount|cheaper|price|cost|quote
- |competitor|another (agency|supplier|provider)|we already (work|have)
- |proof|case stud|reference|guarantee|track record
- |board|legal|procurement|sign|contract|terms
- |think about it|get back to you|not sure|hesitant|risk
- |ακριβ|προϋπολογισμ|έκπτωση|κόστος|τιμή|εγγύηση|συμβόλαιο|ρίσκο|θα το σκεφτ)""",
-                      re.I | re.X)
+# Built from a list, not a verbose regex: re.X strips the spaces inside a phrase, so "too expensive"
+# silently became "tooexpensive" and never matched (caught by the trigger test 2026-09-19).
+TRIGGER_PHRASES = [
+    "budget", "too expensive", "expensive", "discount", "cheaper", "price", "cost", "quote",
+    "competitor", "another agency", "another supplier", "another provider", "we already work",
+    "we already have", "proof", "case stud", "reference", "guarantee", "track record",
+    "board", "legal", "procurement", "sign", "contract", "terms",
+    "think about it", "get back to you", "not sure", "hesitant", "risk",
+    "ακριβ", "προϋπολογισμ", "έκπτωση", "κόστος", "τιμή", "εγγύηση", "συμβόλαιο", "ρίσκο",
+    "θα το σκεφτ", "θα σας πω", "δεν είμαι σίγουρ", "να το δούμε",
+]
+TRIGGERS = re.compile("|".join(re.escape(p) for p in TRIGGER_PHRASES), re.I)
+
 
 SYSTEM_PROMPT = """You sit beside John Kourkoutas during a live business call and tell him what to say next.
 
