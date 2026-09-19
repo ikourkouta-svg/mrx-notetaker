@@ -3,6 +3,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/ikourkouta-svg/mrx-notetaker/main/install.sh | bash -s -- you@company.com
 set -euo pipefail
 EMAIL="${1:?Add your email address at the end of the command}"
+COPILOT_TOKEN="${2:-}"   # optional: turns on the live copilot
+ENDPOINT="https://mrx-advice.vercel.app/api/advice"
+SUPPORT="$HOME/Library/Application Support/MRXNotetaker"
 REPO="ikourkouta-svg/mrx-notetaker"
 APP="$HOME/Applications/MRXNotetaker.app"
 AGENT="$HOME/Library/LaunchAgents/com.mrx.notetaker.plist"
@@ -26,6 +29,18 @@ curl -fsSL "https://github.com/$REPO/releases/latest/download/MRXNotetaker.zip" 
 rm -rf "$APP"
 ditto -x -k /tmp/MRXNotetaker.zip "$HOME/Applications"
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+
+if [[ -n "$COPILOT_TOKEN" ]]; then
+  mkdir -p "$SUPPORT"
+  printf '{"endpoint":"%s","token":"%s"}\n' "$ENDPOINT" "$COPILOT_TOKEN" > "$SUPPORT/copilot.json"
+  if [[ ! -s "$SUPPORT/whisper-model.bin" ]]; then
+    # medium understands Greek noticeably better; Intel Macs get the small model so it stays usable
+    if [[ "$(uname -m)" == "arm64" ]]; then MODEL=ggml-medium.bin; else MODEL=ggml-small.bin; fi
+    echo "Downloading the speech model once ($MODEL, this can take a few minutes)..."
+    curl -fL --progress-bar "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODEL" -o "$SUPPORT/whisper-model.bin"
+  fi
+  echo "Live copilot enabled."
+fi
 
 while true; do
   echo

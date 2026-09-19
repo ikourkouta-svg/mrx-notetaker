@@ -18,16 +18,15 @@ let adviceWindowMinutes = 4.0
 let copilotApps = ["com.microsoft.teams", "us.zoom", "com.cisco.webex"]
 
 struct CopilotSettings {
-    let endpoint: String, token: String, model: String, brief: String
+    let endpoint: String, token: String, model: String
 
     static func load() -> CopilotSettings? {
         guard let data = try? Data(contentsOf: copilotConfig),
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let endpoint = j["endpoint"] as? String, let token = j["token"] as? String else { return nil }
         let model = (j["model"] as? String) ?? support.appendingPathComponent("whisper-model.bin").path
-        let briefPath = support.appendingPathComponent("brief.md")
-        return CopilotSettings(endpoint: endpoint, token: token, model: model,
-                               brief: (try? String(contentsOf: briefPath, encoding: .utf8)) ?? "(no brief provided)")
+        // The brief (our prices and rules) lives on the server, never on a laptop.
+        return CopilotSettings(endpoint: endpoint, token: token, model: model)
     }
 }
 
@@ -200,28 +199,11 @@ final class Copilot {
         busy = true
         sentToday += 1
         show("thinking...", reason)
-        let prompt = """
-        You sit beside a colleague during a live business call and tell him what to say next.
-
-        BRIEF (the only facts you may rely on):
-        \(settings.brief)
-
-        RULES
-        - At most 3 bullets, at most 12 words each. No preamble, no markdown symbols.
-        - Never state a price, discount, percentage, timeline, client name or result that is not in the BRIEF.
-          If a number is needed and the BRIEF does not have it, tell him to ask for theirs instead.
-        - Prefer a question he can ask over a claim he would have to defend.
-        - Answer in English even when the call is in Greek.
-        - If nothing useful can be said, answer exactly: (nothing to add)
-
-        Last \(Int(adviceWindowMinutes)) minutes of the call, "Them" is the other side:
-        \(text)
-        """
         var request = URLRequest(url: URL(string: settings.endpoint)!)
         request.httpMethod = "POST"
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["token": settings.token, "prompt": prompt])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["token": settings.token, "transcript": text])
         let started = Date()
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
             guard let self else { return }
