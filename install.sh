@@ -18,8 +18,9 @@ if (( major < 14 || (major == 14 && minor < 2) )); then
 fi
 # OneDrive puts the shared folder in different places depending on its version, so look everywhere.
 # Not finding it no longer stops the install: recordings wait on the Mac and upload once it appears.
-FOUND=$(find "$HOME/Library/CloudStorage" "$HOME" -maxdepth 3 -type d -iname "MRX-Notetaker" 2>/dev/null \
-        | grep -i onedrive | head -1 || true)
+# Only OneDrive roots: scanning all of $HOME would make macOS ask about Documents, Desktop and Downloads.
+FOUND=$(find "$HOME"/Library/CloudStorage/OneDrive* "$HOME"/OneDrive* -maxdepth 2 -type d -iname "MRX-Notetaker" \
+        2>/dev/null | head -1 || true)
 if [[ -n "$FOUND" ]]; then
   echo "OneDrive folder found: $FOUND"
 else
