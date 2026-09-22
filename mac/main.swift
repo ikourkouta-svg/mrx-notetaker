@@ -294,7 +294,12 @@ guard let userIndex = args.firstIndex(of: "--user"), userIndex + 1 < args.count 
     exit(2)
 }
 let user = args[userIndex + 1]
-let copilot = Copilot(chunkDir: support.appendingPathComponent("chunks"))
+// The application object must exist before ANY window is built: the copilot's panel was created
+// first and crashed the app at launch on Costas' Mac (22 Sep), so nothing else ever ran.
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+// The self-test needs no window and no hotkeys; keep it to the recorders.
+let copilot: Copilot? = args.contains("--selftest") ? nil : Copilot(chunkDir: support.appendingPathComponent("chunks"))
 let permission = DispatchSemaphore(value: 0)
 AVCaptureDevice.requestAccess(for: .audio) { granted in
     log("microphone permission: \(granted ? "granted" : "DENIED")")
@@ -320,8 +325,6 @@ var skipThisCall = false  // set when the user deletes a recording; cleared when
 var lastSeen = Date.distantPast
 
 // Menu bar indicator, so it is always visible whether a call is being recorded.
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 let stateLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 final class MenuActions: NSObject {

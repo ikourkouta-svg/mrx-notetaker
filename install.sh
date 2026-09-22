@@ -80,6 +80,19 @@ cat > "$AGENT" <<PLIST
 </plist>
 PLIST
 launchctl bootstrap "gui/$(id -u)" "$AGENT"
+
+# Diagnostics go to the shared OneDrive folder so John can read them without screenshots.
+FOUND=${FOUND:-$(find "$HOME"/Library/CloudStorage/OneDrive* "$HOME"/OneDrive* -maxdepth 2 -type d -iname "MRX-Notetaker" 2>/dev/null | head -1)}
+if [[ -n "$FOUND" ]]; then
+  sleep 8
+  DIAG="$FOUND/_diagnostics/$(date -u +%Y%m%d-%H%M%S)"
+  mkdir -p "$DIAG"
+  { sw_vers; uname -m; echo; launchctl print "gui/$(id -u)/com.mrx.notetaker" 2>&1 | head -40; } > "$DIAG/system.txt"
+  cp /tmp/MRXNotetaker-test.log "$DIAG/selftest.log" 2>/dev/null || true
+  tail -200 "$LOG" > "$DIAG/app.log" 2>/dev/null || true
+  ls -t "$HOME"/Library/Logs/DiagnosticReports/MRXNotetaker* 2>/dev/null | head -3 | while read -r f; do cp "$f" "$DIAG/"; done
+  echo "Diagnostics sent to John."
+fi
 echo
 echo "DONE. MRX Notetaker now starts by itself with the Mac and records Teams and Zoom calls automatically."
 echo "Look at the top right of your screen, next to the clock: MRX (grey) = waiting, REC (red) = recording a call."
