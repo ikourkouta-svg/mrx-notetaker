@@ -40,7 +40,8 @@ CONF = Path.home() / ".config/meeting-copilot"
 BRIEF = CONF / "brief.md"
 CHUNK_SECONDS = 10
 WINDOW_MINUTES = 4
-OLLAMA = ("http://localhost:11434/v1/chat/completions", "qwen2.5:7b")  # only model fast enough warm
+# 2026-09-20: Ollama retired, Lemonade (llama.cpp, iGPU) serves the local fallback.
+OLLAMA = ("http://localhost:13305/api/v1/chat/completions", "Qwen3-30B-A3B-Instruct-2507-GGUF")
 PRIVATE_BY_DEFAULT = False  # True = F9 stays on Doom (weaker advice), F10 becomes Flash
 GEMINI_ENV = Path.home() / ".doom-secrets/gemini-campaigns.env"
 GEMINI_MODEL = "gemini-flash-latest"  # keys minted after May cannot call gemini-2.5-flash

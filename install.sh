@@ -16,10 +16,20 @@ if (( major < 14 || (major == 14 && minor < 2) )); then
   echo "STOP: this Mac runs macOS $(sw_vers -productVersion). Update macOS to 14.2 or newer, then run the command again."
   exit 1
 fi
-if ! ls -d "$HOME"/Library/CloudStorage/OneDrive*/MRX-Notetaker >/dev/null 2>&1; then
-  echo "STOP: the OneDrive folder MRX-Notetaker is not on this Mac yet."
-  echo "Install and sign in to OneDrive, add the shared MRX-Notetaker folder to My files, then run the command again."
-  exit 1
+# OneDrive puts the shared folder in different places depending on its version, so look everywhere.
+# Not finding it no longer stops the install: recordings wait on the Mac and upload once it appears.
+FOUND=$(find "$HOME/Library/CloudStorage" "$HOME" -maxdepth 3 -type d -iname "MRX-Notetaker" 2>/dev/null \
+        | grep -i onedrive | head -1 || true)
+if [[ -n "$FOUND" ]]; then
+  echo "OneDrive folder found: $FOUND"
+else
+  echo "NOTE: MRX-Notetaker is not visible yet. Installing anyway; recordings wait on this Mac and upload later."
+  echo "---- please send John a photo of the lines below ----"
+  ls -d "$HOME"/Library/CloudStorage/* "$HOME"/OneDrive* 2>/dev/null || echo "(no OneDrive folders at all)"
+  for d in "$HOME"/Library/CloudStorage/OneDrive* "$HOME"/OneDrive*; do
+    [[ -d "$d" ]] && { echo "inside $d:"; ls "$d" 2>/dev/null | head -15; }
+  done
+  echo "-----------------------------------------------------"
 fi
 
 echo "Downloading MRX Notetaker..."

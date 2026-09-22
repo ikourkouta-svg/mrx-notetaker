@@ -239,11 +239,24 @@ final class Session {
     }
 }
 
+/// OneDrive's location depends on its version: ~/Library/CloudStorage/OneDrive-<org>/ (current) or
+/// ~/OneDrive - <org>/ (older), and a shared-folder shortcut can sit one level deeper. Search them all.
 func oneDriveFolder() -> URL? {
-    let cloud = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/CloudStorage")
-    for entry in (try? FileManager.default.contentsOfDirectory(atPath: cloud.path)) ?? [] where entry.hasPrefix("OneDrive") {
-        let candidate = cloud.appendingPathComponent(entry).appendingPathComponent(folderName)
-        if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+    let fm = FileManager.default
+    let home = fm.homeDirectoryForCurrentUser
+    let cloud = home.appendingPathComponent("Library/CloudStorage")
+    var roots: [URL] = []
+    for (base, entries) in [(cloud, (try? fm.contentsOfDirectory(atPath: cloud.path)) ?? []),
+                            (home, (try? fm.contentsOfDirectory(atPath: home.path)) ?? [])] {
+        roots += entries.filter { $0.lowercased().hasPrefix("onedrive") }.map { base.appendingPathComponent($0) }
+    }
+    for root in roots {
+        let direct = root.appendingPathComponent(folderName)
+        if fm.fileExists(atPath: direct.path) { return direct }
+        for sub in (try? fm.contentsOfDirectory(atPath: root.path)) ?? [] {
+            let nested = root.appendingPathComponent(sub).appendingPathComponent(folderName)
+            if fm.fileExists(atPath: nested.path) { return nested }
+        }
     }
     return nil
 }
