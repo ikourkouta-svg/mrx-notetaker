@@ -91,7 +91,7 @@ final class ChunkWriter {
     }
 }
 
-final class Copilot {
+final class Copilot: NSObject {
     private let settings: CopilotSettings
     private let whisper: URL
     private let queue = DispatchQueue(label: "mrx.copilot.transcribe")
@@ -119,7 +119,7 @@ final class Copilot {
         micChunks = ChunkWriter(dir: chunkDir, prefix: "me")
         systemChunks = ChunkWriter(dir: chunkDir, prefix: "them")
 
-        panel = NSPanel(contentRect: NSRect(x: 60, y: 60, width: 460, height: 190),
+        panel = NSPanel(contentRect: NSRect(x: 60, y: 60, width: 460, height: 230),
                         styleMask: [.titled, .nonactivatingPanel, .utilityWindow],
                         backing: .buffered, defer: false)
         panel.title = "MRX Copilot"
@@ -132,12 +132,23 @@ final class Copilot {
         body.textColor = .white
         body.backgroundColor = .clear
         body.isBezeled = false
-        status = NSTextField(labelWithString: "F9 advice   F10 hide")
+        status = NSTextField(labelWithString: "fn+F9 advice   fn+F10 hide")
         status.font = .systemFont(ofSize: 10)
         status.textColor = .secondaryLabelColor
         status.backgroundColor = .clear
         status.isBezeled = false
-        let stack = NSStackView(views: [body, status])
+        super.init()
+
+        // Buttons as well as hotkeys: on a MacBook the top row is media keys, so F9 alone does
+        // nothing and the keys are easy to miss. A nonactivating panel takes the click without
+        // stealing focus from Teams.
+        let advice = NSButton(title: "Advice", target: self, action: #selector(adviceClicked))
+        let hide = NSButton(title: "Hide", target: self, action: #selector(hideClicked))
+        for b in [advice, hide] { b.bezelStyle = .rounded }
+        let row = NSStackView(views: [advice, hide])
+        row.orientation = .horizontal
+        row.spacing = 8
+        let stack = NSStackView(views: [body, status, row])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
@@ -220,9 +231,13 @@ final class Copilot {
     private func show(_ text: String, _ note: String) {
         DispatchQueue.main.async { [self] in
             body.stringValue = text
-            status.stringValue = "F9 advice   F10 hide    \(note)"
+            status.stringValue = "fn+F9 advice   fn+F10 hide    \(note)"
         }
     }
+
+    @objc private func adviceClicked() { advise(reason: "button") }
+
+    @objc private func hideClicked() { panel.orderOut(nil) }
 
     // MARK: window and keys
 

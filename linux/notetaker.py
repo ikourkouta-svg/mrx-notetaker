@@ -20,7 +20,8 @@ from pathlib import Path
 # Doom is John's own machine and its summaries reach John alone, so personal call apps are included
 # here. The macOS build deliberately leaves them out: Costas was told they are never recorded.
 MEETING_APPS = ("teams-for-linux", "teams", "chrome", "chromium", "msedge", "microsoft-edge", "firefox",
-                "zoom", "viber", "whatsapp", "telegram", "signal-desktop", "skype")
+                "zoom", "webex", "ciscocollabhost", "viber", "whatsapp", "mrx-whats", "telegram", "signal-desktop",
+                "skype")
 POLL, GRACE = 3, 45
 
 
@@ -38,7 +39,7 @@ def ffmpeg(source, dest):
                              "-ac", "1", "-c:a", "libopus", "-b:a", "32k", str(dest)], stdin=subprocess.DEVNULL)
 
 
-def record(user, outbox, stop_when, selftest=False):
+def record(user, outbox, stop_when, selftest=False, app=None):
     started = dt.datetime.now(dt.timezone.utc)
     name = f"{user.split('@')[0]}_{'selftest_' if selftest else ''}{started:%Y%m%d-%H%M%S}"
     work = outbox.parent / "recording" / name
@@ -53,7 +54,7 @@ def record(user, outbox, stop_when, selftest=False):
         p.wait(timeout=30)
     ended = dt.datetime.now(dt.timezone.utc)
     (work / "session.json").write_text(json.dumps({
-        "user": user, "host": socket.gethostname(), "source": "linux", "version": 1, "selftest": selftest,
+        "user": user, "host": socket.gethostname(), "source": "linux", "version": 1, "selftest": selftest, "app": app,
         "started": started.isoformat().replace("+00:00", "Z"), "ended": ended.isoformat().replace("+00:00", "Z")}))
     shutil.move(str(work), outbox / name)
     print(f"saved {outbox / name} ({(ended - started).seconds // 60} min)", flush=True)
@@ -81,7 +82,7 @@ def main():
         app = meeting_app_on_mic()
         if app:
             print(f"call detected ({app})", flush=True)
-            record(args.user, outbox, until_call_ends)
+            record(args.user, outbox, until_call_ends, app=app)
         time.sleep(POLL)
 
 
