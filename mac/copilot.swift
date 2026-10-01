@@ -168,8 +168,11 @@ final class Copilot: NSObject {
             func part(_ i: Int) -> String { String(text[Range(m.range(at: i), in: text)!]) }
             let said = part(4).trimmingCharacters(in: .whitespaces)
             guard !said.isEmpty else { continue }
-            lines.append(((Double(part(1)) ?? 0) * 3600 + (Double(part(2)) ?? 0) * 60 + (Double(part(3)) ?? 0),
-                          "\(speaker): \(said)"))
+            let hours: Double = Double(part(1)) ?? 0
+            let minutes: Double = Double(part(2)) ?? 0
+            let seconds: Double = Double(part(3)) ?? 0
+            let at: Double = hours * 3600 + minutes * 60 + seconds
+            lines.append((at, "\(speaker): \(said)"))
         }
         return lines
     }
