@@ -199,11 +199,11 @@ final class Session {
         // Each track is independent: a missing permission on one must not lose the other.
         do {
             try mic.start(dir.appendingPathComponent("mic.m4a"),
-                          onBuffer: armed ? { copilot?.micChunks.write($0) } : nil)
+                          onBuffer: armed ? { copilot?.micAudio.write($0) } : nil)
         } catch { log("mic: \(error)") }
         do {
             try system.start(dir.appendingPathComponent("system.m4a"),
-                             onBuffer: armed ? { copilot?.systemChunks.write($0) } : nil)
+                             onBuffer: armed ? { copilot?.systemAudio.write($0) } : nil)
         } catch { log("system audio: \(error)") }
         if armed { copilot?.callStarted() }
         log("recording \(name)")

@@ -4,8 +4,12 @@
 // a meeting tab from WhatsApp Web needs window titles, which needs the Screen Recording permission
 // that this app is built to avoid.
 //
-// Transcription runs locally with the bundled whisper.cpp (Metal). Advice goes to the MRX endpoint,
-// which holds the Gemini key, so no key is ever on the laptop. Enabled only when copilot.json exists.
+// Transcription runs locally with the bundled whisper.cpp (Metal), and ONLY when advice is asked
+// for: the last few minutes of the call are held in memory and transcribed on the press, so the
+// machine is idle the rest of the time. Transcribing continuously made Costas's MacBook hot and
+// left it grinding through a backlog for minutes after the call (1 Oct 2026).
+// Advice goes to the MRX endpoint, which holds the Gemini key, so no key is ever on the laptop.
+// Enabled only when copilot.json exists.
 
 import AppKit
 import AVFoundation
@@ -13,8 +17,7 @@ import Carbon.HIToolbox
 import Foundation
 
 let copilotConfig = support.appendingPathComponent("copilot.json")
-let chunkSeconds = 10.0
-let adviceWindowMinutes = 4.0
+let adviceWindowSeconds = 120.0   // how much of the call the advice is based on
 let copilotApps = ["com.microsoft.teams", "us.zoom", "com.cisco.webex"]
 
 struct CopilotSettings {
@@ -30,22 +33,14 @@ struct CopilotSettings {
     }
 }
 
-/// Writes the call to 10 second 16 kHz mono WAV files, which is what whisper.cpp expects.
-final class ChunkWriter {
-    private let dir: URL, prefix: String
+/// Keeps the last `adviceWindowSeconds` of one side of the call in memory as 16 kHz mono samples,
+/// and writes them to a WAV only when advice is asked for. Nothing is transcribed until then.
+final class RollingAudio {
     private let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
     private var converter: AVAudioConverter?
-    private var file: AVAudioFile?
-    private var started = Date.distantPast
-    private var index = 0
+    private var samples: [Int16] = []
     private let lock = NSLock()
-    var onChunk: ((URL) -> Void)?
-
-    init(dir: URL, prefix: String) {
-        self.dir = dir
-        self.prefix = prefix
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    }
+    private var limit: Int { Int(16000 * adviceWindowSeconds) }
 
     func write(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
@@ -62,32 +57,32 @@ final class ChunkWriter {
             defer { pending = nil }
             return pending
         }
-        if error != nil || out.frameLength == 0 { return }
-        if Date().timeIntervalSince(started) > chunkSeconds { rotate() }
-        try? file?.write(from: out)
+        guard error == nil, out.frameLength > 0, let data = out.int16ChannelData else { return }
+        samples.append(contentsOf: UnsafeBufferPointer(start: data[0], count: Int(out.frameLength)))
+        if samples.count > limit { samples.removeFirst(samples.count - limit) }
     }
 
-    private func rotate() {
-        if let done = file?.url {
-            file = nil
-            onChunk?(done)
-        }
-        index += 1
-        started = Date()
-        let url = dir.appendingPathComponent("\(prefix)_\(String(format: "%05d", index)).wav")
-        file = try? AVAudioFile(forWriting: url, settings: [
+    /// Writes what is held to `url`. Returns the seconds written, 0 when there is nothing.
+    func snapshot(to url: URL) -> Double {
+        lock.lock()
+        let held = samples
+        lock.unlock()
+        guard !held.isEmpty,
+              let buffer = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(held.count)),
+              let out = buffer.int16ChannelData else { return 0 }
+        held.withUnsafeBufferPointer { out[0].update(from: $0.baseAddress!, count: held.count) }
+        buffer.frameLength = AVAudioFrameCount(held.count)
+        guard let file = try? AVAudioFile(forWriting: url, settings: [
             AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000, AVNumberOfChannelsKey: 1,
             AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
-        ], commonFormat: .pcmFormatInt16, interleaved: true)
+        ], commonFormat: .pcmFormatInt16, interleaved: true), (try? file.write(from: buffer)) != nil else { return 0 }
+        return Double(held.count) / 16000
     }
 
-    func finish() {
+    func clear() {
         lock.lock()
-        defer { lock.unlock() }
-        if let done = file?.url {
-            file = nil
-            onChunk?(done)
-        }
+        samples.removeAll()
+        lock.unlock()
     }
 }
 
@@ -95,20 +90,12 @@ final class Copilot: NSObject {
     private let settings: CopilotSettings
     private let whisper: URL
     private let queue = DispatchQueue(label: "mrx.copilot.transcribe")
-    private var lines: [(Date, String, String)] = []
-    private let lock = NSLock()
-    private var busy = false, lastAuto = Date.distantPast, sentToday = 0, day = ""
+    private var busy = false, sentToday = 0, day = ""
     private let panel: NSPanel
     private let body: NSTextField
     private let status: NSTextField
-    let micChunks: ChunkWriter, systemChunks: ChunkWriter
-
-    // Objection phrases: the same list the Linux copilot uses, spaces intact.
-    static let triggers = ["budget", "too expensive", "expensive", "discount", "cheaper", "price", "cost",
-                           "competitor", "another agency", "we already work", "proof", "case stud", "reference",
-                           "guarantee", "board", "procurement", "contract", "think about it", "get back to you",
-                           "not sure", "risk", "ακριβ", "προϋπολογισμ", "έκπτωση", "κόστος", "τιμή", "εγγύηση",
-                           "συμβόλαιο", "ρίσκο", "θα το σκεφτ", "θα σας πω", "δεν είμαι σίγουρ"]
+    let micAudio = RollingAudio(), systemAudio = RollingAudio()
+    private let workDir: URL
 
     init?(chunkDir: URL) {
         guard let settings = CopilotSettings.load(),
@@ -116,8 +103,8 @@ final class Copilot: NSObject {
               FileManager.default.fileExists(atPath: settings.model) else { return nil }
         self.settings = settings
         self.whisper = whisper
-        micChunks = ChunkWriter(dir: chunkDir, prefix: "me")
-        systemChunks = ChunkWriter(dir: chunkDir, prefix: "them")
+        workDir = chunkDir
+        try? FileManager.default.createDirectory(at: chunkDir, withIntermediateDirectories: true)
 
         panel = NSPanel(contentRect: NSRect(x: 60, y: 60, width: 460, height: 230),
                         styleMask: [.titled, .nonactivatingPanel, .utilityWindow],
@@ -154,61 +141,71 @@ final class Copilot: NSObject {
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         panel.contentView = stack
 
-        micChunks.onChunk = { [weak self] url in self?.transcribe(url, speaker: "Me") }
-        systemChunks.onChunk = { [weak self] url in self?.transcribe(url, speaker: "Them") }
         registerHotKeys()
     }
 
     // MARK: transcription
 
-    private func transcribe(_ url: URL, speaker: String) {
-        queue.async { [self] in
-            let p = Process()
-            p.executableURL = whisper
-            p.arguments = ["-m", settings.model, "-f", url.path, "-l", "auto", "-nt", "-np", "-t", "4"]
-            let pipe = Pipe()
-            p.standardOutput = pipe
-            p.standardError = FileHandle.nullDevice
-            do { try p.run() } catch { return log("whisper failed: \(error)") }
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            p.waitUntilExit()
-            try? FileManager.default.removeItem(at: url)
-            let text = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty && !$0.hasPrefix("[") }.joined(separator: " ")
-            guard !text.isEmpty else { return }
-            lock.lock()
-            lines.append((Date(), speaker, text))
-            lock.unlock()
-            log("\(speaker): \(text)")
-            if speaker == "Them" { autoAdvise(text) }
+    /// Transcribes one side and returns its lines as (second in the clip, text). Timestamps are
+    /// kept so both sides can be merged back into the order they were actually said.
+    private func transcribe(_ url: URL, speaker: String) -> [(Double, String)] {
+        let p = Process()
+        p.executableURL = whisper
+        p.arguments = ["-m", settings.model, "-f", url.path, "-l", "auto", "-np", "-t", "4"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { log("whisper failed: \(error)"); return [] }
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        p.waitUntilExit()
+        try? FileManager.default.removeItem(at: url)
+        var lines: [(Double, String)] = []
+        // whisper.cpp prints "[00:00:04.000 --> 00:00:07.000]   text"
+        let pattern = try! NSRegularExpression(pattern: #"\[(\d+):(\d+):(\d+)\.\d+ --> [^\]]+\]\s*(.+)"#)
+        for line in out.split(separator: "\n") {
+            let text = String(line)
+            guard let m = pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { continue }
+            func part(_ i: Int) -> String { String(text[Range(m.range(at: i), in: text)!]) }
+            let said = part(4).trimmingCharacters(in: .whitespaces)
+            guard !said.isEmpty else { continue }
+            lines.append(((Double(part(1)) ?? 0) * 3600 + (Double(part(2)) ?? 0) * 60 + (Double(part(3)) ?? 0),
+                          "\(speaker): \(said)"))
         }
+        return lines
     }
 
+    /// The last minutes of the call, both sides, transcribed now. Runs off the main thread.
     private func transcript() -> String {
-        let cutoff = Date().addingTimeInterval(-adviceWindowMinutes * 60)
-        lock.lock()
-        defer { lock.unlock() }
-        return lines.filter { $0.0 >= cutoff }.map { "\($0.1): \($0.2)" }.joined(separator: "\n")
+        let mic = workDir.appendingPathComponent("me.wav"), system = workDir.appendingPathComponent("them.wav")
+        try? FileManager.default.removeItem(at: mic)
+        try? FileManager.default.removeItem(at: system)
+        var lines: [(Double, String)] = []
+        if micAudio.snapshot(to: mic) > 1 { lines += transcribe(mic, speaker: "Me") }
+        if systemAudio.snapshot(to: system) > 1 { lines += transcribe(system, speaker: "Them") }
+        return lines.sorted { $0.0 < $1.0 }.map { $0.1 }.joined(separator: "\n")
     }
 
     // MARK: advice
-
-    private func autoAdvise(_ text: String) {
-        let lower = text.lowercased()
-        guard Copilot.triggers.contains(where: { lower.contains($0) }),
-              Date().timeIntervalSince(lastAuto) > 45 else { return }
-        lastAuto = Date()
-        advise(reason: "objection heard")
-    }
 
     func advise(reason: String = "") {
         let today = ISO8601DateFormatter().string(from: Date()).prefix(10).description
         if today != day { day = today; sentToday = 0 }
         guard !busy, sentToday < 200 else { return }
-        let text = transcript()
-        guard !text.isEmpty else { return show("(nothing heard yet)", "") }
         busy = true
         sentToday += 1
+        show("listening back...", reason)
+        // Transcribing happens here, on the press, not throughout the call.
+        queue.async { [self] in
+            let text = transcript()
+            guard !text.isEmpty else {
+                busy = false
+                return show("(nothing heard yet)", "")
+            }
+            ask(text, reason: reason)
+        }
+    }
+
+    private func ask(_ text: String, reason: String) {
         show("thinking...", reason)
         var request = URLRequest(url: URL(string: settings.endpoint)!)
         request.httpMethod = "POST"
@@ -249,11 +246,8 @@ final class Copilot: NSObject {
     }
 
     func callEnded() {
-        micChunks.finish()
-        systemChunks.finish()
-        lock.lock()
-        lines.removeAll()
-        lock.unlock()
+        micAudio.clear()
+        systemAudio.clear()
         DispatchQueue.main.async { [self] in panel.orderOut(nil) }
     }
 

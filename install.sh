@@ -44,11 +44,14 @@ xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 if [[ -n "$COPILOT_TOKEN" ]]; then
   mkdir -p "$SUPPORT"
   printf '{"endpoint":"%s","token":"%s"}\n' "$ENDPOINT" "$COPILOT_TOKEN" > "$SUPPORT/copilot.json"
-  if [[ ! -s "$SUPPORT/whisper-model.bin" ]]; then
-    # medium understands Greek noticeably better; Intel Macs get the small model so it stays usable
-    if [[ "$(uname -m)" == "arm64" ]]; then MODEL=ggml-medium.bin; else MODEL=ggml-small.bin; fi
+  # The copilot only transcribes when advice is asked for, and has to answer in seconds, so it runs
+  # a light model. The real transcript, where Greek accuracy matters, is made on Doom with large-v3.
+  # medium was here until 1 Oct 2026 and kept a MacBook hot for the whole call.
+  if [[ "$(uname -m)" == "arm64" ]]; then MODEL=ggml-small.bin; else MODEL=ggml-base.bin; fi
+  if [[ ! -s "$SUPPORT/whisper-model.bin" ]] || [[ "$(cat "$SUPPORT/whisper-model.name" 2>/dev/null)" != "$MODEL" ]]; then
     echo "Downloading the speech model once ($MODEL, this can take a few minutes)..."
     curl -fL --progress-bar "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODEL" -o "$SUPPORT/whisper-model.bin"
+    echo "$MODEL" > "$SUPPORT/whisper-model.name"
   fi
   echo "Live copilot enabled."
 fi
