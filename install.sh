@@ -56,6 +56,17 @@ if [[ -n "$COPILOT_TOKEN" ]]; then
   echo "Live copilot enabled."
 fi
 
+# No sync folder on this Mac means finished recordings have nowhere to go: Costas' MacBook held
+# 12 of them from 16 Sep to 2 Oct 2026 and only a local log said so. One sign-in and the app
+# uploads them straight to the shared folder over https instead.
+if [[ -z "${FOUND:-}" ]] && ! grep -q refresh_token "$SUPPORT/graph.json" 2>/dev/null; then
+  echo
+  echo "This Mac cannot see the shared OneDrive folder, so recordings will be uploaded directly."
+  echo "That needs one sign-in with your work account. Follow the two lines below."
+  "$APP/Contents/MacOS/MRXNotetaker" --user "$EMAIL" --login \
+    || echo "WARNING: sign-in did not finish. Recordings will wait on this Mac. Run the installer again."
+fi
+
 while true; do
   echo
   echo "TEST: for the next 10 seconds play any YouTube video with sound AND say a few words."
@@ -99,3 +110,7 @@ fi
 echo
 echo "DONE. MRX Notetaker now starts by itself with the Mac and records Teams and Zoom calls automatically."
 echo "Look at the top right of your screen, next to the clock: MRX (grey) = waiting, REC (red) = recording a call."
+if [[ -z "${FOUND:-}" ]]; then
+  echo "This Mac uploads over https because the shared OneDrive folder is not synced here."
+  echo "If you ever see recordings piling up, send John: tail -5 ~/Library/Logs/MRXNotetaker.log"
+fi

@@ -4,7 +4,9 @@
 //   mic.m4a     the microphone (you)
 //   system.m4a  everything the Mac plays (everyone else), via a Core Audio process tap
 // and 45 s after the app releases the microphone writes session.json LAST and moves the folder
-// into the OneDrive folder "MRX-Notetaker", where the transcription server picks it up.
+// into the OneDrive folder "MRX-Notetaker", where the transcription server picks it up. When that
+// folder is not synced on this Mac, upload.swift PUTs the session into the same shared folder over
+// https instead, so a recording can never be stranded on the laptop (see upload.swift).
 //
 // Usage: MRXNotetaker --user costas@mrexporttoafrica.com [--selftest]
 
@@ -266,7 +268,16 @@ func flushOutbox() {
     let fm = FileManager.default
     guard let pending = try? fm.contentsOfDirectory(atPath: outboxDir.path), !pending.isEmpty else { return }
     guard let target = oneDriveFolder() else {
-        log("OneDrive folder \(folderName) not found; \(pending.count) session(s) waiting")
+        log("OneDrive folder \(folderName) not found; \(pending.count) session(s) waiting, trying https")
+        // One upload at a time, off the main thread: a backlog of long meetings takes minutes
+        // and the menu bar must stay alive. graphBusy is only ever touched on the main thread.
+        if !graphBusy {
+            graphBusy = true
+            graphQueue.async {
+                graphFlush()
+                DispatchQueue.main.async { graphBusy = false }
+            }
+        }
         return
     }
     for name in pending where !name.hasPrefix(".") {
@@ -290,10 +301,16 @@ func flushOutbox() {
 
 let args = CommandLine.arguments
 guard let userIndex = args.firstIndex(of: "--user"), userIndex + 1 < args.count else {
-    print("usage: MRXNotetaker --user EMAIL [--selftest]")
+    print("usage: MRXNotetaker --user EMAIL [--selftest] [--login]")
     exit(2)
 }
 let user = args[userIndex + 1]
+// Sign-in only: no window, no microphone, nothing resident. The installer calls this when the
+// OneDrive sync folder is not on the Mac, so recordings can leave over https instead.
+if args.contains("--login") {
+    try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+    exit(graphLogin() ? 0 : 1)
+}
 // The application object must exist before ANY window is built: the copilot's panel was created
 // first and crashed the app at launch on Costas' Mac (22 Sep), so nothing else ever ran.
 let app = NSApplication.shared
@@ -314,8 +331,15 @@ if args.contains("--selftest") {
         Thread.sleep(forTimeInterval: 10)
         session.finish()
     } catch { log("self-test failed: \(error)") }
-    flushOutbox()
-    log(oneDriveFolder() == nil ? "SELF-TEST NOT UPLOADED: OneDrive folder \(folderName) is missing" : "self-test done")
+    if oneDriveFolder() == nil {
+        log("OneDrive folder \(folderName) is missing; uploading the self-test over https")
+        graphFlush()   // the installer runs this in the foreground, so block and report the truth
+        let left = (try? FileManager.default.contentsOfDirectory(atPath: outboxDir.path))?.filter { !$0.hasPrefix(".") } ?? []
+        log(left.isEmpty ? "self-test done over https" : "SELF-TEST NOT UPLOADED: \(left.count) session(s) still waiting")
+    } else {
+        flushOutbox()
+        log("self-test done")
+    }
     exit(0)
 }
 
