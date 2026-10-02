@@ -132,23 +132,28 @@ func graphFolder(_ token: String) -> (drive: String, item: String)? {
     if let drive = settings["drive_id"] as? String, let item = settings["item_id"] as? String {
         return (drive, item)
     }
-    var request = URLRequest(url: URL(string: "\(graphRoot)/me/drive/sharedWithMe")!)
-    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-    guard let result = httpSync(request), result.status == 200 else {
-        log("sharedWithMe failed")
-        return nil
-    }
-    let items = (jsonBody(result.body)["value"] as? [[String: Any]]) ?? []
-    for entry in items where (entry["name"] as? String) == folderName {
-        guard let remote = entry["remoteItem"] as? [String: Any],
-              let item = remote["id"] as? String,
-              let parent = remote["parentReference"] as? [String: Any],
-              let drive = parent["driveId"] as? String else { continue }
-        var settings = graphSettings()
-        settings["drive_id"] = drive
-        settings["item_id"] = item
-        saveGraphSettings(settings)
-        return (drive, item)
+    // Two places to look: the plain "shared with me" list, and the root of the user's own drive,
+    // because a folder the user has added to My files appears there as a remoteItem instead.
+    for path in ["/me/drive/sharedWithMe", "/me/drive/root/children"] {
+        var request = URLRequest(url: URL(string: graphRoot + path)!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let result = httpSync(request), result.status == 200 else {
+            log("\(path) failed")
+            continue
+        }
+        let items = (jsonBody(result.body)["value"] as? [[String: Any]]) ?? []
+        for entry in items where (entry["name"] as? String) == folderName {
+            guard let remote = entry["remoteItem"] as? [String: Any],
+                  let item = remote["id"] as? String,
+                  let parent = remote["parentReference"] as? [String: Any],
+                  let drive = parent["driveId"] as? String else { continue }
+            var settings = graphSettings()
+            settings["drive_id"] = drive
+            settings["item_id"] = item
+            saveGraphSettings(settings)
+            log("target folder found through \(path)")
+            return (drive, item)
+        }
     }
     log("\(folderName) is not shared with this account")
     return nil
