@@ -44,7 +44,10 @@ WINDOW_MINUTES = 4
 OLLAMA = ("http://localhost:13305/api/v1/chat/completions", "Qwen3-30B-A3B-Instruct-2507-GGUF")
 PRIVATE_BY_DEFAULT = False  # True = F9 stays on Doom (weaker advice), F10 becomes Flash
 GEMINI_ENV = Path.home() / ".doom-secrets/gemini-campaigns.env"
-GEMINI_MODEL = "gemini-flash-latest"  # keys minted after May cannot call gemini-2.5-flash
+# Pinned, never an alias: "gemini-flash-latest" silently moved to a model that ignores
+# thinkingBudget, which truncated every answer (2026-10-07). Keys minted after May cannot
+# call gemini-2.5-flash, so 3.8 is the floor.
+GEMINI_MODEL = "gemini-3.8-flash"
 PCLOUD_CLIENTS = Path.home() / "pCloudDrive/01-MRX/Clients"
 # Business calls only. Viber, WhatsApp, Telegram, Signal and Skype are deliberately absent: those are
 # recorded for John's own notes, but never transcribed live or sent to Gemini.
@@ -162,11 +165,13 @@ def ask_local(prompt):
 
 def ask_gemini(prompt):
     key = dict(re.findall(r"^([A-Z_]+)=(.*)$", GEMINI_ENV.read_text(), re.M))["GEMINI_API_KEY"].strip().strip('"')
-    # thinkingBudget 0: flash otherwise spends the whole output budget on hidden thinking and
-    # returns a truncated fragment (seen 2026-09-19: 284 thought tokens, finishReason MAX_TOKENS).
+    # thinkingLevel LOW replaces thinkingBudget 0, which 3-series models stop honouring.
+    # The output budget is generous because thinking tokens are drawn from it: at 300 the
+    # model spent 285 on hidden thinking and returned a fragment (MAX_TOKENS, 2026-09-19
+    # and again 2026-10-07). temperature is omitted: ignored since Gemini 3.6 Flash.
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
-                       "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300,
-                                            "thinkingConfig": {"thinkingBudget": 0}}}).encode()
+                       "generationConfig": {"maxOutputTokens": 1200,
+                                            "thinkingConfig": {"thinkingLevel": "LOW"}}}).encode()
     req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
                                  body, {"Content-Type": "application/json", "x-goog-api-key": key})
     answer = json.load(urllib.request.urlopen(req, timeout=60))
